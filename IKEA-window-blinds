@@ -1,6 +1,5 @@
 /**
  *
- *	Copyright 2019 SmartThings
  *
  *	Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *	in compliance with the License. You may obtain a copy of the License at:
@@ -24,13 +23,14 @@ metadata {
         capability "Window Shade"
         capability "Health Check"
         capability "Switch Level"
+        capability "Battery"
 
         command "pause"
         
        	attribute "lastCheckin", "String"
-		attribute "lastOpened", "String"
+        attribute "lastOpened", "String"
 
-		fingerprint inClusters: "0000,0001,0003,0004", manufacturer: "IKEA of Sweden", model: "FYRTUR block-out roller blind"
+        fingerprint inClusters: "0000,0001,0003,0004", manufacturer: "IKEA of Sweden", model: "FYRTUR block-out roller blind"
     }
 
 
@@ -44,34 +44,37 @@ metadata {
                 attributeState "closing", label: 'Closing', action: "pause", icon: "st.thermostat.thermostat-down", backgroundColor: "#00A0DC", nextState: "partially open"
             }
             tileAttribute("device.lastCheckin", key: "SECONDARY_CONTROL") {
-    			attributeState("default", label:'Last Update: ${currentValue}',icon: "st.Health & Wellness.health9")
+                attributeState("default", label:'Last Update: ${currentValue}',icon: "st.Health & Wellness.health9")
             }
         }
         standardTile("contPause", "device.switch", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
-            state "pause", label:"", icon:'st.sonos.pause-btn', action:'pause', backgroundColor:"#cccccc"
+            state "pause", label:"", icon:'st.sonos.stop-btn', action:'pause', backgroundColor:"#cccccc"
         }
-        standardTile("refresh", "device.refresh", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
+        standardTile("refresh", "device.refresh", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
             state "default", label:"", action:"refresh.refresh", icon:"st.secondary.refresh"
         }
-        valueTile("shadeLevel", "device.level", width: 4, height: 1) {
+        valueTile("shadeLevel", "device.level", width: 3, height: 1) {
             state "level", label: 'Blind is ${currentValue}% open', defaultState: true
         }
-        controlTile("levelSliderControl", "device.level", "slider", width:2, height: 1, inactiveLabel: false) {
+        controlTile("levelSliderControl", "device.level", "slider", width:3, height: 1, inactiveLabel: false) {
             state "level", action:"switch level.setLevel"
         }
         standardTile("resetClosed", "device.windowShade", inactiveLabel: false, decoration: "flat", width: 3, height: 1) {
-			state "default", action:"close", label: "Override Close", icon:"https://raw.githubusercontent.com/a4refillpad/media/master/blind-closed.png"
+			state "default", action:"close", label: "Close", icon:"https://raw.githubusercontent.com/a4refillpad/media/master/blind-closed.png"
 	  	}
 		standardTile("resetOpen", "device.windowShade", inactiveLabel: false, decoration: "flat", width: 3, height: 1) {
-			state "default", action:"open", label: "Override Open", icon:"https://raw.githubusercontent.com/a4refillpad/media/master/blind-open.png"
+			state "default", action:"open", label: "Open", icon:"https://raw.githubusercontent.com/a4refillpad/media/master/blind-open.png"
 	  	}
- 
+ 		valueTile("battery", "device.battery", decoration: "flat", inactiveLabel: false, width: 2, height: 2) {
+			state "battery", label:'${currentValue}% battery', unit:""
+		}
 
         main "windowShade"
-        details(["windowShade", "contPause", "shadeLevel", "levelSliderControl", "refresh", "resetClosed", "resetOpen"])
+        details(["windowShade", "shadeLevel", "levelSliderControl", "contPause", "battery", "refresh", "resetClosed", "resetOpen"])
     }
 }
 
+private getCLUSTER_BATTERY_LEVEL() { 0x0001 }
 private getCLUSTER_WINDOW_COVERING() { 0x0102 }
 private getCOMMAND_OPEN() { 0x00 }
 private getCOMMAND_CLOSE() { 0x01 }
@@ -110,6 +113,10 @@ def parse(String description) {
                 levelEventHandler(newLevel)
             }
         } 
+        if (descMap?.clusterInt == CLUSTER_BATTERY_LEVEL && descMap.value) {
+            log.debug "attr: ${descMap?.attrInt}, value: ${descMap?.value}, descValue: ${Integer.parseInt(descMap.value, 16)}"
+            sendEvent(name: "battery", value: Integer.parseInt(descMap.value, 16))
+        }
     }
 }
 
@@ -128,10 +135,10 @@ def levelEventHandler(currentLevel) {
             } else if (lastLevel > currentLevel) {
                 sendEvent([name:"windowShade", value: "closing"])
             }
-            runIn(1, "updateFinalState", [overwrite:true])
+            runIn(3, "updateFinalState", [overwrite:true])
         }
     }
-    runIn(1, "updateFinalState", [overwrite:true])
+    runIn(3, "updateFinalState", [overwrite:true])
 }
 
 def updateFinalState() {
@@ -154,7 +161,7 @@ def open() {
 }
 
 def setLevel(data, rate = null) {
-	data = data.toInteger()
+    data = data.toInteger()
     log.info "setLevel()"
     def cmd
     cmd = zigbee.command(CLUSTER_WINDOW_COVERING, COMMAND_GOTO_LIFT_PERCENTAGE, zigbee.convertToHexString(100 - data, 2))
@@ -171,15 +178,17 @@ def pause() {
 /**
  * PING is used by Device-Watch in attempt to reach the Device
  * */
+
 def ping() {
-    return refresh()
+    return zigbee.readAttribute(CLUSTER_BATTERY_LEVEL, 0x0021) // Read the Battery Level
 }
 
 def refresh() {
     log.info "refresh()"
-    def cmds
-    cmds = zigbee.readAttribute(CLUSTER_WINDOW_COVERING, ATTRIBUTE_POSITION_LIFT)
     
+    def cmds
+    cmds = zigbee.readAttribute(CLUSTER_WINDOW_COVERING, ATTRIBUTE_POSITION_LIFT) + zigbee.readAttribute(CLUSTER_BATTERY_LEVEL, 0x0021) 
+
     return cmds
 }
 
@@ -190,6 +199,7 @@ def configure() {
     log.debug "Configuring Reporting and Bindings."
 
     def cmds
-    cmds = zigbee.configureReporting(CLUSTER_WINDOW_COVERING, ATTRIBUTE_POSITION_LIFT, DataType.UINT8, 0, 600, null)
+    cmds = zigbee.configureReporting(CLUSTER_WINDOW_COVERING, ATTRIBUTE_POSITION_LIFT, DataType.UINT8, 0, 600, null) + zigbee.configureReporting(CLUSTER_BATTERY_LEVEL, 0x0021, DataType.UINT8, 600, 21600, 0x01)
+
     return refresh() + cmds
 }
